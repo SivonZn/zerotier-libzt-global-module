@@ -1,0 +1,352 @@
+diff --git a/include/ZeroTierSockets.h b/include/ZeroTierSockets.h
+index ba9732a..658f4ba 100644
+--- a/include/ZeroTierSockets.h
++++ b/include/ZeroTierSockets.h
+@@ -1022,6 +1022,24 @@ typedef struct {
+ #define ZTCALL
+ #endif
+ 
++/** Optional raw Ethernet bridge callback used by root integrations. */
++typedef void (*zts_vnet_frame_callback)(uint64_t net_id, const void* frame, unsigned int len);
++
++/** Install a callback receiving complete Ethernet frames emitted by libzt. */
++ZTS_API int ZTCALL zts_net_set_frame_callback(uint64_t net_id, zts_vnet_frame_callback callback);
++
++/** Inject a complete Ethernet frame into a joined libzt network. */
++ZTS_API int ZTCALL zts_net_send_frame(uint64_t net_id, const void* frame, unsigned int len);
++
++/** Add a multicast membership observed on an external kernel TAP. */
++ZTS_API int ZTCALL zts_net_multicast_add(uint64_t net_id, uint64_t mac, uint32_t adi);
++
++/** Remove a multicast membership observed on an external kernel TAP. */
++ZTS_API int ZTCALL zts_net_multicast_remove(uint64_t net_id, uint64_t mac, uint32_t adi);
++
++/** Remove all multicast memberships owned by an external kernel TAP. */
++ZTS_API int ZTCALL zts_net_multicast_clear(uint64_t net_id);
++
+ //----------------------------------------------------------------------------//
+ // Central API                                                                //
+ //----------------------------------------------------------------------------//
+@@ -1322,6 +1340,9 @@ ZTS_API int ZTCALL zts_init_blacklist_if(const char* prefix, unsigned int len);
+  *     experiences a problem, `ZTS_ERR_ARG` if invalid argument.
+  */
+ ZTS_API int ZTCALL zts_init_set_roots(const void* roots_data, unsigned int len);
++// Module extension: boot-time Planet actually accepted by Core, independent
++// of online state or controller authorization. len is capacity in / size out.
++ZTS_API int ZTCALL zts_node_get_loaded_planet(void* data, unsigned int* len);
+ 
+ /**
+  * @brief Enable or disable low-bandwidth mode. This is an initialization function that can
+diff --git a/src/Controls.cpp b/src/Controls.cpp
+index 8aa0a72..789f62b 100644
+--- a/src/Controls.cpp
++++ b/src/Controls.cpp
+@@ -148,6 +148,12 @@ int zts_init_blacklist_if(const char* prefix, unsigned int len)
+     return zts_service->addInterfacePrefixToBlacklist(prefix, len);
+ }
+ 
++int zts_node_get_loaded_planet(void* data, unsigned int* len)
++{
++    ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
++    return zts_service->getLoadedPlanet(data, len);
++}
++
+ int zts_init_set_roots(const void* roots_data, unsigned int len)
+ {
+     ACQUIRE_SERVICE_OFFLINE();
+@@ -457,6 +463,45 @@ int zts_net_leave(const uint64_t net_id)
+     return zts_service->leave(net_id);
+ }
+ 
++int zts_net_send_frame(uint64_t net_id, const void* frame, unsigned int len)
++{
++    ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
++    if (! frame || len < 14) {
++        return ZTS_ERR_ARG;
++    }
++    const auto* bytes = reinterpret_cast<const uint8_t*>(frame);
++    uint64_t source = 0;
++    uint64_t dest = 0;
++    for (unsigned int i = 0; i < 6; ++i) {
++        dest = (dest << 8) | bytes[i];
++        source = (source << 8) | bytes[6 + i];
++    }
++    const unsigned int etherType = (static_cast<unsigned int>(bytes[12]) << 8) | bytes[13];
++    // Frames read from the kernel TAP are outbound from this node. Feed them
++    // through the VirtualTap transmit handler into ZeroTier Core.
++    zts_service->tapFrameHandler(
++        net_id, MAC(source), MAC(dest), etherType, 0, bytes + 14, len - 14);
++    return ZTS_ERR_OK;
++}
++
++int zts_net_multicast_add(uint64_t net_id, uint64_t mac, uint32_t adi)
++{
++    ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
++    return zts_service->setExternalMulticastGroup(net_id, mac, adi, true);
++}
++
++int zts_net_multicast_remove(uint64_t net_id, uint64_t mac, uint32_t adi)
++{
++    ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
++    return zts_service->setExternalMulticastGroup(net_id, mac, adi, false);
++}
++
++int zts_net_multicast_clear(uint64_t net_id)
++{
++    ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
++    return zts_service->clearExternalMulticastGroups(net_id);
++}
++
+ int zts_net_transport_is_ready(const uint64_t net_id)
+ {
+     ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
+diff --git a/src/NodeService.cpp b/src/NodeService.cpp
+index 036f406..4250853 100644
+--- a/src/NodeService.cpp
++++ b/src/NodeService.cpp
+@@ -27,6 +27,7 @@
+ #include "Node.hpp"
+ #include "Utilities.hpp"
+ #include "VirtualTap.hpp"
++#include "World.hpp"
+ 
+ #if defined(__WINDOWS__)
+ #include <iphlpapi.h>
+@@ -352,6 +353,14 @@ NodeService::ReasonForTermination NodeService::run()
+                 }
+             }
+         }
++        // Report what Core actually accepted, not just the input passed to
++        // setRoots (Core may silently ignore malformed worlds).
++        {
++            Buffer<ZT_WORLD_MAX_SERIALIZED_LENGTH> planet;
++            _node->planet().serialize(planet);
++            Mutex::Lock lock(_store_m);
++            _loadedPlanet.assign(reinterpret_cast<const char*>(planet.data()), planet.size());
++        }
+         // Main I/O loop
+         _nextBackgroundTaskDeadline = 0;
+         int64_t clockShouldBe = OSUtils::now();
+@@ -1298,10 +1307,18 @@ int NodeService::getAddrAtIdx(uint64_t net_id, unsigned int idx, char* dst, unsi
+     if (sa->sa_family == AF_INET) {
+         struct sockaddr_in* in4 = (struct sockaddr_in*)sa;
+         inet_ntop(AF_INET, &(in4->sin_addr), dst, ZTS_INET6_ADDRSTRLEN);
++        const unsigned int prefix = Utils::ntoh((uint16_t)in4->sin_port);
++        if (prefix <= 32) {
++            OSUtils::ztsnprintf(dst + strlen(dst), len - strlen(dst), "/%u", prefix);
++        }
+     }
+     if (sa->sa_family == AF_INET6) {
+         struct sockaddr_in6* in6 = (struct sockaddr_in6*)sa;
+         inet_ntop(AF_INET6, &(in6->sin6_addr), dst, ZTS_INET6_ADDRSTRLEN);
++        const unsigned int prefix = Utils::ntoh((uint16_t)in6->sin6_port);
++        if (prefix <= 128) {
++            OSUtils::ztsnprintf(dst + strlen(dst), len - strlen(dst), "/%u", prefix);
++        }
+     }
+     return ZTS_ERR_OK;
+ }
+@@ -1331,10 +1348,18 @@ int NodeService::getRouteAtIdx(
+     if (sa->sa_family == AF_INET) {
+         struct sockaddr_in* in4 = (struct sockaddr_in*)sa;
+         inet_ntop(AF_INET, &(in4->sin_addr), target, ZTS_INET6_ADDRSTRLEN);
++        const unsigned int prefix = Utils::ntoh((uint16_t)in4->sin_port);
++        if (prefix <= 32) {
++            OSUtils::ztsnprintf(target + strlen(target), len - strlen(target), "/%u", prefix);
++        }
+     }
+     if (sa->sa_family == AF_INET6) {
+         struct sockaddr_in6* in6 = (struct sockaddr_in6*)sa;
+         inet_ntop(AF_INET6, &(in6->sin6_addr), target, ZTS_INET6_ADDRSTRLEN);
++        const unsigned int prefix = Utils::ntoh((uint16_t)in6->sin6_port);
++        if (prefix <= 128) {
++            OSUtils::ztsnprintf(target + strlen(target), len - strlen(target), "/%u", prefix);
++        }
+     }
+     // via
+     struct sockaddr* sa_via = (struct sockaddr*)&(netState.config.routes[idx].via);
+@@ -1370,6 +1395,28 @@ int NodeService::getMulticastSubAtIdx(uint64_t net_id, unsigned int idx, uint64_
+     return ZTS_ERR_OK;
+ }
+ 
++int NodeService::setExternalMulticastGroup(uint64_t net_id, uint64_t mac, uint32_t adi, bool subscribed)
++{
++    if (! net_id || (mac & 0x010000000000ULL) == 0 || (mac & 0xffff000000000000ULL) != 0) {
++        return ZTS_ERR_ARG;
++    }
++    Mutex::Lock _l(_nets_m);
++    std::map<uint64_t, NetworkState>::iterator n(_nets.find(net_id));
++    if (n == _nets.end() || ! n->second.tap) return ZTS_ERR_NO_RESULT;
++    n->second.tap->setExternalMulticastGroup(MAC(mac), adi, subscribed);
++    return ZTS_ERR_OK;
++}
++
++int NodeService::clearExternalMulticastGroups(uint64_t net_id)
++{
++    if (! net_id) return ZTS_ERR_ARG;
++    Mutex::Lock _l(_nets_m);
++    std::map<uint64_t, NetworkState>::iterator n(_nets.find(net_id));
++    if (n == _nets.end() || ! n->second.tap) return ZTS_ERR_NO_RESULT;
++    n->second.tap->clearExternalMulticastGroups();
++    return ZTS_ERR_OK;
++}
++
+ int NodeService::getPathAtIdx(uint64_t peer_id, unsigned int idx, char* path, unsigned int len)
+ {
+     return ZTS_ERR_NO_RESULT;   // TODO
+@@ -2166,6 +2213,16 @@ void NodeService::forceTcpRelay(bool enabled)
+     _forceTcpRelay = enabled;
+ }
+ 
++int NodeService::getLoadedPlanet(void* data, unsigned int* len)
++{
++    Mutex::Lock lock(_store_m);
++    if (_loadedPlanet.empty()) return ZTS_ERR_SERVICE;
++    if (!data || !len || *len < _loadedPlanet.size()) return ZTS_ERR_ARG;
++    memcpy(data, _loadedPlanet.data(), _loadedPlanet.size());
++    *len = static_cast<unsigned int>(_loadedPlanet.size());
++    return ZTS_ERR_OK;
++}
++
+ int NodeService::setRoots(const void* rootsData, unsigned int len)
+ {
+     if (! rootsData || len <= 0 || len > ZTS_STORE_DATA_LEN) {
+diff --git a/src/NodeService.hpp b/src/NodeService.hpp
+index c600bbc..591efeb 100644
+--- a/src/NodeService.hpp
++++ b/src/NodeService.hpp
+@@ -154,6 +154,8 @@ class NodeService {
+     Node* _node;
+ 
+     uint64_t _nodeId;
++    // Immutable boot snapshot, published after local initialization completes.
++    std::string _loadedPlanet;
+     unsigned int _primaryPort;
+     unsigned int _secondaryPort;
+     unsigned int _tertiaryPort;
+@@ -358,6 +360,10 @@ class NodeService {
+ 
+     int getMulticastSubAtIdx(uint64_t net_id, unsigned int idx, uint64_t* mac, uint32_t* adi);
+ 
++    int setExternalMulticastGroup(uint64_t net_id, uint64_t mac, uint32_t adi, bool subscribed);
++
++    int clearExternalMulticastGroups(uint64_t net_id);
++
+     int getPathAtIdx(uint64_t peer_id, unsigned int idx, char* path, unsigned int len);
+ 
+     /** Orbit a moon */
+@@ -368,6 +374,7 @@ class NodeService {
+ 
+     /** Return the integer-form of the node's identity */
+     uint64_t getNodeId();
++    int getLoadedPlanet(void* data, unsigned int* len);
+ 
+     /** Gets the node's identity */
+     int getIdentity(char* keypair, unsigned int* len);
+diff --git a/src/VirtualTap.cpp b/src/VirtualTap.cpp
+index 933a4d7..94b9f24 100644
+--- a/src/VirtualTap.cpp
++++ b/src/VirtualTap.cpp
+@@ -47,6 +47,16 @@
+ 
+ namespace ZeroTier {
+ 
++static zts_vnet_frame_callback zts_external_frame_callback = nullptr;
++
++extern "C" ZTS_API int ZTCALL zts_net_set_frame_callback(
++    uint64_t net_id, zts_vnet_frame_callback callback)
++{
++    (void)net_id;
++    zts_external_frame_callback = callback;
++    return ZTS_ERR_OK;
++}
++
+ extern Events* zts_events;
+ 
+ /**
+@@ -211,14 +221,14 @@ void VirtualTap::put(const MAC& from, const MAC& to, unsigned int etherType, con
+ 
+ void VirtualTap::scanMulticastGroups(std::vector<MulticastGroup>& added, std::vector<MulticastGroup>& removed)
+ {
+-    std::vector<MulticastGroup> newGroups;
+     Mutex::Lock _l(_multicastGroups_m);
+-    // TODO: get multicast subscriptions
++    std::vector<MulticastGroup> newGroups(_externalMulticastGroups);
+     std::vector<InetAddress> allIps(ips());
+     for (std::vector<InetAddress>::iterator ip(allIps.begin()); ip != allIps.end(); ++ip)
+         newGroups.push_back(MulticastGroup::deriveMulticastGroupForAddressResolution(*ip));
+ 
+     std::sort(newGroups.begin(), newGroups.end());
++    newGroups.erase(std::unique(newGroups.begin(), newGroups.end()), newGroups.end());
+ 
+     for (std::vector<MulticastGroup>::iterator m(newGroups.begin()); m != newGroups.end(); ++m) {
+         if (! std::binary_search(_multicastGroups.begin(), _multicastGroups.end(), *m))
+@@ -231,6 +241,29 @@ void VirtualTap::scanMulticastGroups(std::vector<MulticastGroup>& added, std::ve
+     _multicastGroups.swap(newGroups);
+ }
+ 
++bool VirtualTap::setExternalMulticastGroup(const MAC& mac, uint32_t adi, bool subscribed)
++{
++    Mutex::Lock _l(_multicastGroups_m);
++    const MulticastGroup group(mac, adi);
++    std::vector<MulticastGroup>::iterator existing =
++        std::find(_externalMulticastGroups.begin(), _externalMulticastGroups.end(), group);
++    if (subscribed) {
++        if (existing != _externalMulticastGroups.end()) return false;
++        _externalMulticastGroups.push_back(group);
++        std::sort(_externalMulticastGroups.begin(), _externalMulticastGroups.end());
++        return true;
++    }
++    if (existing == _externalMulticastGroups.end()) return false;
++    _externalMulticastGroups.erase(existing);
++    return true;
++}
++
++void VirtualTap::clearExternalMulticastGroups()
++{
++    Mutex::Lock _l(_multicastGroups_m);
++    _externalMulticastGroups.clear();
++}
++
+ void VirtualTap::setMtu(unsigned int mtu)
+ {
+     _mtu = mtu;
+@@ -427,6 +460,13 @@ void zts_lwip_eth_rx(
+     to.copyTo(ethhdr.dest.addr, 6);
+     ethhdr.type = Utils::hton((uint16_t)etherType);
+ 
++    if (zts_external_frame_callback) {
++        std::vector<uint8_t> frame(sizeof(ethhdr) + len);
++        memcpy(frame.data(), &ethhdr, sizeof(ethhdr));
++        if (len) memcpy(frame.data() + sizeof(ethhdr), data, len);
++        zts_external_frame_callback(tap->_net_id, frame.data(), static_cast<unsigned int>(frame.size()));
++    }
++
+     p = pbuf_alloc(PBUF_RAW, (uint16_t)len + sizeof(struct eth_hdr), PBUF_RAM);
+     if (! p) {
+         // DEBUG_ERROR("dropped packet: unable to allocate memory for
+diff --git a/src/VirtualTap.hpp b/src/VirtualTap.hpp
+index 69cd8d7..5823a8a 100644
+--- a/src/VirtualTap.hpp
++++ b/src/VirtualTap.hpp
+@@ -116,6 +116,12 @@ class VirtualTap {
+      */
+     void scanMulticastGroups(std::vector<MulticastGroup>& added, std::vector<MulticastGroup>& removed);
+ 
++    /** Add or remove a multicast membership owned by an external kernel TAP. */
++    bool setExternalMulticastGroup(const MAC& mac, uint32_t adi, bool subscribed);
++
++    /** Remove every multicast membership owned by an external kernel TAP. */
++    void clearExternalMulticastGroups();
++
+     /**
+      * Set MTU
+      */
+@@ -171,6 +177,7 @@ class VirtualTap {
+     int _shutdownSignalPipe[2] = { 0 };
+ 
+     std::vector<MulticastGroup> _multicastGroups;
++    std::vector<MulticastGroup> _externalMulticastGroups;
+     Mutex _multicastGroups_m;
+ 
+     void phyOnTcpConnect(PhySocket* sock, void** uptr, bool success)

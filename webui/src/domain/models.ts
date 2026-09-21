@@ -1,0 +1,4 @@
+export type Status = { running: boolean; nodeOnline: boolean; planetLoaded?: boolean; activationId?: string; networkReady?: boolean; tapReady?: boolean; routeSync?: boolean; dataPlaneReady?: boolean; lastError?: string; networkId?: string; interface?: string; rulePriority?: number; frameBridge?: boolean; addresses?: string[]; routes?: string[]; underlayInterface?: string };
+export type Config = { enabled: boolean; networkId: string; interface: string; routeMode: "managed"; rulePriority: string; routingTable: number; mtu: number; port: number; rootsPath: string; storagePath: string };
+export type PlanetInfo = { exists: boolean; mode: "custom" | "official"; path: string; size: number; sha256: string };
+export const defaults: Config = { enabled: true, networkId: "", interface: "zt0", routeMode: "managed", rulePriority: "auto", routingTable: 51820, mtu: 1400, port: 0, rootsPath: "/data/adb/zt-global/roots", storagePath: "/data/adb/zt-global/state" };

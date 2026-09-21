@@ -1,0 +1,3 @@
+[submodule "vendor/libzt-src"]
+	path = vendor/libzt-src
+	url = https://github.com/zerotier/libzt.git

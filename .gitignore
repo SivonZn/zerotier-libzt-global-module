@@ -1,0 +1,55 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editors & IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.bak
+
+# C / C++ & CMake build artifacts
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.ninja
+.ninja_*
+
+# Object and dependency files
+*.o
+*.obj
+*.d
+
+# WebUI / Node
+node_modules/
+**/node_modules/
+webui/dist/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Packaging output & archives
+output/
+*.zip
+*.tar.gz
+
+# Local test & runtime artifacts
+runtime/
+logs/
+state/
+*.log
+*.pid
+*.sock
+*.lock
+planet.previous
+planet-rollback.pending
+planet-transaction/

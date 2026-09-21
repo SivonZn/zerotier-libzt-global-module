@@ -1,0 +1,401 @@
+#!/system/bin/sh
+
+MODDIR="${0%/*}"
+BASE="${ZT_GLOBAL_BASE:-/data/adb/zt-global}"
+CONFIG="$BASE/config.ini"
+DAEMON="${ZT_GLOBAL_DAEMON:-$MODDIR/bin/zt-globald}"
+SERVICE="${ZT_GLOBAL_SERVICE:-$MODDIR/service.sh}"
+
+export LD_LIBRARY_PATH="$MODDIR/lib:${LD_LIBRARY_PATH:-}"
+TRANSACTION="$BASE/planet-transaction"
+
+# Serialize the entire mutation, including stop/load/rollback. Native flock
+# survives shell failures without leaving stale directory locks.
+case "${1:-status}" in
+  save|stop|restart|planet-reset|planet-begin|planet-chunk|planet-commit|planet-abort)
+    if [ "${ZT_GLOBAL_CTL_LOCKED:-}" != 1 ]; then
+      mkdir -p "$BASE/runtime" || exit 2
+      export ZT_GLOBAL_CTL_LOCKED=1
+      exec "$DAEMON" --with-lock "$BASE/runtime/control-operation.lock" sh "$0" "$@"
+    fi
+    ;;
+esac
+
+value() {
+  awk -v wanted="$1" '
+    /^[[:space:]]*[#;]/ {next}
+    { pos=index($0,"="); if (!pos) next
+      key=substr($0,1,pos-1); gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      if (key==wanted) {result=substr($0,pos+1); gsub(/^[[:space:]]+|[[:space:]]+$/, "", result)}
+    }
+    END {print result}
+  ' "$CONFIG" 2>/dev/null
+}
+
+json_bool() {
+  [ "$1" = true ] && printf true || printf false
+}
+
+status() {
+  export LD_LIBRARY_PATH="$MODDIR/lib:${LD_LIBRARY_PATH:-}"
+  result="$($DAEMON --control status 2>/dev/null)"
+  case "$result" in
+    \{*\})
+      iface="$(value interface)"; [ -n "$iface" ] || iface=zt0
+      addresses="$(ip -o -4 addr show dev "$iface" 2>/dev/null | awk 'BEGIN{q=""}{printf "%s\"%s\"",q,$4;q=","}')"
+      [ -n "$addresses" ] || addresses=""
+      result_prefix="$(printf '%s' "$result" | sed 's/}[[:space:]]*$//')"
+      printf '%s' "$result_prefix"; printf ',"addresses":[%s]}\n' "$addresses"
+      ;;
+    *)
+      daemon_running=false
+      [ -n "$(daemon_pids)" ] && daemon_running=true
+      printf '{"running":%s,"nodeOnline":false,"planetLoaded":false,"activationId":"","networkReady":false,"tapReady":false,"routeSync":false,"dataPlaneReady":false,"networkId":"%s","interface":"%s","rulePriority":0,"frameBridge":false,"lastError":"control socket unavailable"}\n' \
+        "$daemon_running" "$(value network_id)" "$(value interface)"
+      ;;
+  esac
+}
+
+config_json() {
+  enabled="$(value enabled)"; [ -n "$enabled" ] || enabled=true
+  priority="$(value rule_priority)"; [ -n "$priority" ] || priority=auto
+  table="$(value routing_table)"; [ -n "$table" ] || table=51820
+  mtu="$(value mtu)"; [ -n "$mtu" ] || mtu=1400
+  port="$(value port)"; [ -n "$port" ] || port=0
+  printf '{"enabled":%s,"networkId":"%s","interface":"%s","routeMode":"managed","rulePriority":"%s","routingTable":%s,"mtu":%s,"port":%s,"rootsPath":"%s","storagePath":"%s"}\n' \
+    "$(json_bool "$enabled")" "$(value network_id)" "$(value interface)" "$priority" \
+    "$table" "$mtu" "$port" "$(value roots_path)" "$(value storage_path)"
+}
+
+fail() {
+  printf '{"ok":false,"error":"%s"}\n' "$1"
+  exit 2
+}
+
+save_config() {
+  [ "$#" -eq 6 ] || fail invalid_argument_count
+  enabled="$1"; network_id="$2"; priority="$3"; table="$4"; mtu="$5"; port="$6"
+  case "$enabled" in true|false) ;; *) fail invalid_enabled ;; esac
+  case "$network_id" in ''|????????????????) ;; *) fail invalid_network_id ;; esac
+  case "$network_id" in *[!0-9a-fA-F]*) fail invalid_network_id ;; esac
+  case "$priority" in auto) ;; *[!0-9]*|'') fail invalid_rule_priority ;; esac
+  case "$table" in *[!0-9]*|'') fail invalid_routing_table ;; esac
+  case "$mtu" in *[!0-9]*|'') fail invalid_mtu ;; esac
+  case "$port" in *[!0-9]*|'') fail invalid_port ;; esac
+  [ "$table" -ge 1 ] && [ "$table" -le 2147483647 ] || fail invalid_routing_table
+  [ "$mtu" -ge 1280 ] && [ "$mtu" -le 2800 ] || fail invalid_mtu
+  [ "$port" -ge 0 ] && [ "$port" -le 65535 ] || fail invalid_port
+  if [ "$priority" != auto ]; then
+    [ "$priority" -ge 2 ] && [ "$priority" -le 32764 ] || fail invalid_rule_priority
+  fi
+
+  mkdir -p "$BASE" || fail create_config_directory_failed
+  temp="$(mktemp "$BASE/config.ini.XXXXXX")" || fail create_temp_failed
+  trap 'rm -f "$temp"' EXIT HUP INT TERM
+  source_config="$CONFIG"
+  [ -e "$CONFIG" ] || source_config="$MODDIR/config/config.example.ini"
+  [ -f "$source_config" ] && [ -r "$source_config" ] || fail config_read_failed
+  network_id="$(printf '%s' "$network_id" | tr 'A-F' 'a-f')"
+  # Only UI-owned keys are updated. Unknown fields, comments, blank lines and
+  # path/interface choices survive. Duplicate owned keys are collapsed so an
+  # old value cannot override the update. First-time saves seed the template.
+  awk -v enabled="$enabled" -v network_id="$network_id" -v priority="$priority" \
+      -v table="$table" -v mtu="$mtu" -v port="$port" '
+    BEGIN {
+      count=split("enabled network_id rule_priority routing_table mtu port", order, " ")
+      values["enabled"]=enabled; values["network_id"]=network_id
+      values["rule_priority"]=priority; values["routing_table"]=table
+      values["mtu"]=mtu; values["port"]=port
+    }
+    /^[[:space:]]*[#;]/ {print; next}
+    {
+      key=$0; pos=index(key,"=")
+      if (pos) {
+        key=substr(key,1,pos-1); gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+        if (key=="interface_mode") next
+        if (key in values) {
+          if (!seen[key]++) print key "=" values[key]
+          next
+        }
+      }
+      print
+    }
+    END {for (i=1;i<=count;i++) if (!seen[order[i]]) print order[i] "=" values[order[i]]}
+  ' "$source_config" > "$temp" || fail write_failed
+  chown 0:0 "$temp" || fail config_owner_failed
+  chmod 0600 "$temp" || fail config_mode_failed
+  mv -f "$temp" "$CONFIG" || fail replace_failed
+  trap - EXIT HUP INT TERM
+  printf '{"ok":true}\n'
+}
+
+daemon_pids() {
+  recorded="$(cat "$BASE/runtime/zt-globald.pid" 2>/dev/null)"
+  case "$recorded" in
+    *[!0-9]*|'') ;;
+    *)
+      executable="$(readlink "/proc/$recorded/exe" 2>/dev/null)"
+      if [ "$executable" = "$DAEMON" ] || [ "$executable" = "$DAEMON (deleted)" ]; then
+        printf '%s\n' "$recorded"
+      fi
+      ;;
+  esac
+  for process in /proc/[0-9]*; do
+    [ -L "$process/exe" ] || continue
+    executable="$(readlink "$process/exe" 2>/dev/null)"
+    if [ "$executable" = "$DAEMON" ] || [ "$executable" = "$DAEMON (deleted)" ]; then
+      command_line="$(tr '\000' ' ' < "$process/cmdline" 2>/dev/null)"
+      case "$command_line" in *' --with-lock '*|*' --control '*|*' --validate-planet '*) continue ;; esac
+      pid="${process#/proc/}"
+      [ "$pid" = "$recorded" ] || printf '%s\n' "$pid"
+    fi
+  done
+}
+
+stop_daemon() {
+  export LD_LIBRARY_PATH="$MODDIR/lib:${LD_LIBRARY_PATH:-}"
+  "$DAEMON" --control stop >/dev/null 2>&1 || true
+  count=0
+  while [ -n "$(daemon_pids)" ] && [ "$count" -lt 10 ]; do
+    sleep 1
+    count=$((count + 1))
+  done
+  remaining="$(daemon_pids)"
+  if [ -n "$remaining" ]; then
+    for pid in $remaining; do kill -TERM "$pid" 2>/dev/null || true; done
+    count=0
+    while [ -n "$(daemon_pids)" ] && [ "$count" -lt 5 ]; do
+      sleep 1
+      count=$((count + 1))
+    done
+  fi
+  remaining="$(daemon_pids)"
+  if [ -n "$remaining" ]; then
+    for pid in $remaining; do kill -KILL "$pid" 2>/dev/null || true; done
+    sleep 1
+  fi
+  rm -f "$BASE/runtime/zt-globald.pid" "$BASE/runtime/control.sock"
+  [ -z "$(daemon_pids)" ]
+}
+
+validate_planet_paths() {
+  configured_planet="$(value planet_path)"
+  configured_roots="$(value roots_path)"
+  [ -z "$configured_planet" ] || [ "$configured_planet" = "$BASE/planet" ] || fail unsupported_planet_path
+  [ -z "$configured_roots" ] || [ "$configured_roots" = "$BASE/roots" ] || fail unsupported_roots_path
+  storage="$(value storage_path)"; [ -n "$storage" ] || storage="$BASE/state"
+  storage="$(cd "$storage" 2>/dev/null && pwd -P)" || fail invalid_storage_path
+  canonical_base="$(cd "$BASE" && pwd -P)" || fail invalid_base_path
+  case "$storage" in "$canonical_base"/*) ;; *) fail invalid_storage_path ;; esac
+}
+
+start_and_confirm_planet() {
+  # A fresh token prevents an old control socket/process from acknowledging
+  # this restart. Confirmation is independent of nodeOnline/dataPlaneReady.
+  activation_id="$(date +%s)-$$-$1"
+  ZT_GLOBAL_ACTIVATION_ID="$activation_id" sh "$SERVICE" >/dev/null 2>&1 || return 1
+  deadline=$(( $(date +%s) + 35 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    result="$("$DAEMON" --control status 2>/dev/null)"
+    case "$result" in
+      *\"activationId\":\"$activation_id\"*)
+        case "$result" in *'"running":true'*)
+          case "$result" in *'"planetLoaded":true'*) return 0 ;; esac
+        esac ;;
+    esac
+    [ -n "$(daemon_pids)" ] || return 1
+    sleep 1
+  done
+  return 1
+}
+
+clear_planet_transaction() {
+  rm -rf "$TRANSACTION"
+  rm -f "$BASE/runtime/planet-rollback.pending" "$BASE/planet.previous"
+}
+
+prepare_planet_transaction() {
+  [ ! -d "$TRANSACTION" ] || fail unfinished_planet_transaction_run_restart
+  validate_planet_paths
+  transaction_stage="$(mktemp -d "$BASE/runtime/planet-transaction.XXXXXX")" || fail create_transaction_failed
+  chmod 0700 "$transaction_stage"
+  for name in planet roots; do
+    if [ -e "$BASE/$name" ] || [ -L "$BASE/$name" ]; then
+      if ! cp -p "$BASE/$name" "$transaction_stage/$name"; then
+        rm -rf "$transaction_stage"; fail backup_planet_failed
+      fi
+    fi
+  done
+  printf '%s\n' "$1" > "$transaction_stage/target"
+  if [ "$1" = custom ]; then
+    cp -p "$decoded" "$transaction_stage/candidate" || { rm -rf "$transaction_stage"; fail backup_candidate_failed; }
+  fi
+  # Publish the complete backup before changing any active files.
+  mv "$transaction_stage" "$TRANSACTION" || fail publish_transaction_failed
+}
+
+restore_planet_files() {
+  for name in planet roots; do
+    if [ -f "$TRANSACTION/$name" ]; then
+      cp -p "$TRANSACTION/$name" "$BASE/$name.restore" &&
+        mv -f "$BASE/$name.restore" "$BASE/$name" || return 1
+    else
+      rm -f "$BASE/$name" || return 1
+    fi
+  done
+  rm -f "$storage/roots"
+}
+
+activate_planet_transaction() {
+  validate_planet_paths
+  stop_daemon || fail daemon_stop_timeout
+  if [ ! -f "$TRANSACTION/rollback" ]; then
+    target_mode="$(cat "$TRANSACTION/target")"
+    installed=false
+    case "$target_mode" in
+      custom)
+        if cp -p "$TRANSACTION/candidate" "$BASE/planet.new" &&
+           mv -f "$BASE/planet.new" "$BASE/planet"; then installed=true; fi ;;
+      official)
+        if rm -f "$BASE/planet" "$BASE/roots"; then installed=true; fi ;;
+      *) fail invalid_planet_transaction ;;
+    esac
+    if [ "$installed" = true ] && rm -f "$storage/roots" && start_and_confirm_planet candidate; then
+      clear_planet_transaction
+      printf '{"ok":true,"mode":"%s","planetLoaded":true,"restarted":true}\n' "$target_mode"
+      return 0
+    fi
+    # Persist rollback intent first, so a subsequent restart resumes recovery.
+    : > "$TRANSACTION/rollback" || fail record_rollback_failed
+  fi
+  stop_daemon || fail rollback_stop_failed
+  restore_planet_files || fail rollback_restore_failed
+  if start_and_confirm_planet rollback; then
+    clear_planet_transaction
+    printf '{"ok":false,"rolledBack":true,"error":"planet_load_failed_previous_restored"}\n'
+  else
+    # Keep both backups and recovery intent; never report an unverified rollback.
+    printf '{"ok":false,"rolledBack":false,"error":"planet_load_and_rollback_failed"}\n'
+  fi
+  return 2
+}
+
+restart_daemon() {
+  if [ -d "$TRANSACTION" ]; then activate_planet_transaction; return $?; fi
+  # Old builds wrote this marker based on data-plane readiness. It cannot be
+  # used as rollback authority: planet.previous may belong to another switch.
+  rm -f "$BASE/runtime/planet-rollback.pending"
+  stop_daemon || fail daemon_stop_timeout
+  start_and_confirm_planet restart || fail daemon_planet_load_failed
+  printf '{"ok":true,"planetLoaded":true}\n'
+}
+
+planet_info() {
+  planet="$BASE/planet"
+  roots="$BASE/roots"
+  if [ ! -f "$planet" ] && [ ! -f "$roots" ]; then
+    printf '{"exists":false,"mode":"official","path":"%s","size":0,"sha256":""}\n' "$planet"
+    return
+  fi
+  [ -f "$planet" ] || planet="$roots"
+  size="$(wc -c < "$planet" 2>/dev/null | tr -d ' ')"
+  sha="$(sha256sum "$planet" 2>/dev/null | awk '{print $1}')"
+  printf '{"exists":true,"mode":"custom","path":"%s","size":%s,"sha256":"%s"}\n' "$planet" "${size:-0}" "$sha"
+}
+
+planet_reset() {
+  [ "$#" -eq 0 ] || fail invalid_argument_count
+  prepare_planet_transaction official
+  activate_planet_transaction
+}
+
+validate_upload_token() {
+  case "$1" in ''|*[!0-9a-fA-F]*) fail invalid_upload_token ;; esac
+  [ "${#1}" -ge 8 ] && [ "${#1}" -le 48 ] || fail invalid_upload_token
+}
+
+planet_begin() {
+  [ "$#" -eq 2 ] || fail invalid_argument_count
+  token="$1"; expected_size="$2"
+  validate_upload_token "$token"
+  case "$expected_size" in *[!0-9]*|'') fail invalid_planet_size ;; esac
+  [ "$expected_size" -ge 178 ] && [ "$expected_size" -le 8480 ] || fail invalid_planet_size
+  mkdir -p "$BASE/runtime" || fail create_runtime_failed
+  upload="$BASE/runtime/planet-upload-$token.b64"
+  meta="$BASE/runtime/planet-upload-$token.size"
+  : > "$upload" || fail create_upload_failed
+  printf '%s\n' "$expected_size" > "$meta" || fail create_upload_failed
+  chmod 0600 "$upload" "$meta"
+  printf '{"ok":true}\n'
+}
+
+planet_chunk() {
+  [ "$#" -eq 2 ] || fail invalid_argument_count
+  token="$1"; encoded="$2"
+  validate_upload_token "$token"
+  [ -n "$encoded" ] || fail empty_planet_chunk
+  case "$encoded" in *[!A-Za-z0-9+/=]*) fail invalid_planet_chunk ;; esac
+  upload="$BASE/runtime/planet-upload-$token.b64"
+  [ -f "$upload" ] || fail upload_not_started
+  current="$(wc -c < "$upload" 2>/dev/null | tr -d ' ')"
+  [ $((current + ${#encoded})) -le 11308 ] || fail planet_upload_too_large
+  printf '%s' "$encoded" >> "$upload" || fail append_upload_failed
+  printf '{"ok":true}\n'
+}
+
+planet_commit() {
+  [ "$#" -eq 1 ] || fail invalid_argument_count
+  token="$1"
+  validate_upload_token "$token"
+  upload="$BASE/runtime/planet-upload-$token.b64"
+  meta="$BASE/runtime/planet-upload-$token.size"
+  [ -f "$upload" ] && [ -f "$meta" ] || fail upload_not_started
+  expected_size="$(cat "$meta" 2>/dev/null)"
+  decoded="$BASE/runtime/planet-upload-$token.bin"
+  if ! base64 -d < "$upload" > "$decoded" 2>/dev/null; then
+    base64 --decode < "$upload" > "$decoded" 2>/dev/null || fail invalid_planet_base64
+  fi
+  actual_size="$(wc -c < "$decoded" 2>/dev/null | tr -d ' ')"
+  [ "$actual_size" = "$expected_size" ] || fail planet_size_mismatch
+  if ! "$DAEMON" --validate-planet "$decoded" >/dev/null 2>&1; then
+    rm -f "$decoded" "$upload" "$meta"
+    fail invalid_planet_structure
+  fi
+  sha="$(sha256sum "$decoded" 2>/dev/null | awk '{print $1}')"
+  [ "${#sha}" -eq 64 ] || fail planet_hash_failed
+  chown 0:0 "$decoded" || fail planet_owner_failed
+  chmod 0600 "$decoded" || fail planet_mode_failed
+  prepare_planet_transaction custom
+  rm -f "$decoded" "$upload" "$meta"
+  activate_planet_transaction
+}
+
+planet_abort() {
+  [ "$#" -eq 1 ] || fail invalid_argument_count
+  token="$1"
+  validate_upload_token "$token"
+  rm -f "$BASE/runtime/planet-upload-$token.b64" \
+    "$BASE/runtime/planet-upload-$token.size" \
+    "$BASE/runtime/planet-upload-$token.bin"
+  printf '{"ok":true}\n'
+}
+
+case "${1:-status}" in
+  status) status ;;
+  config) config_json ;;
+  save) shift; save_config "$@" ;;
+  stop) stop_daemon || fail daemon_stop_timeout; printf '{"ok":true}\n' ;;
+  restart) restart_daemon ;;
+  routes) ip route show table "$(value routing_table)" 2>/dev/null ;;
+  multicast) "$DAEMON" --control multicast 2>/dev/null || printf '{"members":0,"synchronized":false}\n' ;;
+  logs)
+    tail -n 140 "$BASE/logs/daemon.log" 2>/dev/null
+    ;;
+  planet-info) planet_info ;;
+  planet-reset) shift; planet_reset "$@" ;;
+  planet-begin) shift; planet_begin "$@" ;;
+  planet-chunk) shift; planet_chunk "$@" ;;
+  planet-commit) shift; planet_commit "$@" ;;
+  planet-abort) shift; planet_abort "$@" ;;
+  *) fail unknown_command ;;
+esac

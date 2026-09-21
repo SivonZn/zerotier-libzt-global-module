@@ -1,0 +1,134 @@
+:root {
+  color-scheme: light dark;
+  --bg: var(--background, #090c12);
+  --surface: var(--surfaceContainerLow, #111620);
+  --surface-2: var(--surfaceContainer, #171e2b);
+  --surface-3: var(--surfaceContainerHigh, #202938);
+  --surface-highest: var(--surfaceContainerHighest, #273142);
+  --surface-lowest: var(--surfaceContainerLowest, #070a0f);
+  --border: var(--outlineVariant, #293346);
+  --outline-color: var(--outline, #536079);
+  --text: var(--onSurface, #f2f5ff);
+  --muted: var(--onSurfaceVariant, #9ba6ba);
+  --accent: var(--primary, #9db7ff);
+  --on-accent: var(--onPrimary, #08265f);
+  --accent-container: var(--primaryContainer, #26365f);
+  --on-accent-container: var(--onPrimaryContainer, #dce4ff);
+  --success: #56d39a;
+  --danger: var(--error, #ffb4ab);
+  --danger-container: var(--errorContainer, #4e211f);
+}
+
+.page-navigation {
+  --nav-gap: 5px;
+  --page-progress: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--nav-gap);
+  background: transparent;
+}
+.page-nav-indicator {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: calc((100% - 8px - (var(--nav-gap) * 3)) / 4);
+  border-radius: 13px;
+  background: var(--accent);
+  box-shadow: 0 4px 14px var(--accent-container);
+  transform: translateX(calc(var(--page-progress) * (100% + var(--nav-gap))));
+  will-change: transform;
+}
+.page-nav-item { position: relative; z-index: 1; }
+.page-nav-item.active { color: var(--on-accent); background: transparent; }
+.page-navigation.dragging .page-nav-indicator { filter: brightness(1.08); }
+.page-track { display: flex; min-width: 0; height: 100%; touch-action: pan-y pinch-zoom; }
+.page-panel { min-width: 0; height: 100%; flex: 0 0 100%; }
+.icon-button svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.page-nav-item svg { width: 18px; height: 18px; flex: 0 0 18px; }
+.intro-icon svg { width: 27px; height: 27px; }
+.page-intro h1 { font-size: clamp(24px, 4vw, 34px); }
+.page-intro p { font-size: 13px; }
+.section-heading h2, .section-card h2, .log-dialog h2, .confirm-dialog h2 { font-size: 19px; }
+.field-label { font-size: 12px; }
+.text-input { min-height: 45px; border-radius: 13px; padding: 10px 12px; font-size: 16px; font-weight: 400; }
+.switch-row strong, .status-strip strong, .summary-grid strong, .status-info-card strong, .planet-picker-copy strong { font-size: 12px; }
+.primary-button, .secondary-button, .danger-button, .page-nav-item, .toast { font-size: 12px; }
+.label, .summary-key, .switch-row small, .planet-picker-copy small { font-size: 10px; }
+.field-help, .readonly code, .notice { font-size: 11px; }
+.header-log-button { flex: 0 0 40px; }
+.header-apply-button { min-width: 72px; height: 40px; border: 1px solid var(--accent); border-radius: 12px; padding: 0 15px; color: var(--on-accent); background: var(--accent); font-size: 12px; font-weight: 700; }
+.header-apply-button:disabled { cursor: wait; opacity: .58; }
+.overview-page-content { padding-top: 22px; }
+.connection-card { --connection-color: var(--muted); display: flex; min-width: 0; align-items: center; gap: 13px; padding: 20px 18px 16px; margin-bottom: 14px; border-color: color-mix(in srgb, var(--connection-color) 48%, var(--border)); background: color-mix(in srgb, var(--connection-color) 12%, var(--surface)); }
+.connection-card.connected { --connection-color: var(--success); }
+.connection-card.connecting { --connection-color: var(--accent); }
+.connection-card.disconnected { --connection-color: var(--danger); }
+.status-error { min-width: 0; margin: -3px 0 14px; padding: 10px 13px; border: 1px solid color-mix(in srgb, var(--danger) 48%, var(--border)); border-radius: 12px; color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--surface)); overflow-wrap: anywhere; font-size: 12px; line-height: 1.45; }
+.connection-icon { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; border-radius: 14px; color: var(--connection-color); background: color-mix(in srgb, var(--connection-color) 18%, transparent); }
+.connection-icon svg { width: 23px; height: 23px; }
+.connection-copy { display: grid; min-width: 0; gap: 3px; }
+.connection-copy small { color: color-mix(in srgb, var(--connection-color) 74%, var(--text)); font-size: 10px; font-weight: 650; letter-spacing: .08em; }
+.connection-copy strong { color: var(--connection-color); font-size: 19px; letter-spacing: -.02em; }
+.overview-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.status-info-card { display: grid; min-width: 0; min-height: 70px; align-content: center; gap: 5px; padding: 15px 19px; }
+.status-info-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; outline: none; box-shadow: none; clip-path: inset(50%); -webkit-tap-highlight-color: transparent; }
+.planet-card h2 { margin-bottom: 0; }
+.planet-heading { align-items: center; }
+.planet-mode-badge { flex: 0 0 auto; overflow: hidden; border-radius: 999px; padding: 5px 8px; color: var(--muted); background: var(--surface-3); font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.planet-mode-badge.custom { color: var(--on-accent-container); background: var(--accent-container); }
+.planet-mode-badge.official { color: var(--success); background: color-mix(in srgb, var(--success) 14%, var(--surface-2)); }
+.planet-picker { display: flex; min-height: 66px; align-items: center; gap: 12px; padding: 12px 13px; border: 1px dashed var(--outline-color); border-radius: 15px; outline: none; background: var(--surface-2); cursor: pointer; -webkit-tap-highlight-color: transparent; transition: border-color 160ms ease, background-color 160ms ease, transform 160ms ease; }
+.file-input:focus + .planet-picker, .file-input:focus-visible + .planet-picker, .planet-picker:focus, .planet-picker:focus-visible { outline: none; box-shadow: none; }
+.planet-picker:active { transform: scale(.992); }
+.planet-picker.disabled { cursor: wait; opacity: .62; }
+.planet-picker-icon { display: grid; width: 40px; height: 40px; flex: 0 0 40px; place-items: center; border-radius: 12px; color: var(--on-accent-container); background: var(--accent-container); font-size: 20px; }
+.planet-picker-icon svg { width: 21px; height: 21px; }
+.planet-picker-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.planet-picker-copy strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.planet-picker-copy small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.planet-picker-arrow { color: var(--muted); font-size: 24px; }
+.planet-progress { display: block; width: 100%; height: 5px; margin: 10px 0 0; accent-color: var(--accent); }
+.inline-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; padding-top: 4px; }
+.planet-actions { margin-top: 12px; padding-top: 0; }
+.planet-actions > button { min-width: 0; flex: 1 1 0; }
+.primary-button, .secondary-button, .danger-button { min-height: 40px; border-radius: 12px; padding: 9px 14px; font-size: 12px; font-weight: 700; transition: filter 160ms ease, transform 160ms ease, background-color 160ms ease; }
+.primary-button:active, .secondary-button:active, .danger-button:active { transform: scale(.96); }
+.primary-button:hover { filter: brightness(1.08); }
+.secondary-button { color: var(--text); }
+.secondary-button:hover { background: var(--surface-3); }
+.danger-button { border: 1px solid var(--danger); color: var(--danger-container); background: var(--danger); }
+.danger-button:hover { filter: brightness(1.06); }
+.module-about-brand { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface-2); }
+.module-about-mark { display: grid; width: 40px; height: 40px; flex: 0 0 40px; place-items: center; border-radius: 13px; color: var(--on-accent); background: var(--accent); }
+.module-about-mark svg { width: 22px; height: 22px; }
+.module-about-brand > div { min-width: 0; }
+.module-about-brand h2 { margin: 0; font-size: 13px; }
+.module-about-brand p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+.dialog-layer { min-width: 0; padding: 18px; }
+.dialog-backdrop { width: 100%; backdrop-filter: blur(5px); animation: fade-in 180ms ease-out; }
+.confirm-layer { z-index: 60; }
+.confirm-dialog { position: relative; display: grid; width: min(430px, 100%); max-height: calc(100dvh - 24px); min-width: 0; overflow-y: auto; gap: 15px; padding: 20px; border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--border)); border-radius: 22px; background: var(--surface); box-shadow: 0 28px 90px #0009; animation: dialog-in 220ms cubic-bezier(.2, .9, .2, 1); }
+.confirm-dialog > * { min-width: 0; }
+.confirm-mark { display: grid; width: 44px; height: 44px; place-items: center; border-radius: 14px; color: var(--danger); background: var(--danger-container); }
+.confirm-mark svg { width: 23px; height: 23px; }
+.confirm-dialog h2 { margin: 0 0 8px; }
+.confirm-dialog p { margin: 0; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; line-height: 1.6; word-break: break-word; }
+.confirm-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.log-dialog { width: min(760px, 100%); max-width: 100%; min-width: 0; max-height: min(76vh, 680px); overflow: hidden; box-shadow: 0 28px 90px #0009; }
+.log-dialog pre { width: 100%; min-width: 0; flex: 1; margin-bottom: 0; overflow: auto; overflow-wrap: anywhere; word-break: break-word; }
+@media (hover: hover) and (pointer: fine) { .planet-picker:not(.disabled):hover { border-color: var(--accent); background: var(--surface-3); } }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(18px) scale(.97); } }
+@media (max-width: 720px) { .overview-page-content { padding-top: 18px; } .overview-card-grid { grid-template-columns: 1fr; gap: 10px; } .status-info-card { min-height: 66px; padding: 14px 18px; } .dialog-layer { padding: 12px; } .confirm-dialog { padding: 18px; border-radius: 20px; } .log-dialog { width: 100%; max-height: 84vh; border-radius: 20px; padding: 14px; } .log-dialog pre { padding: 10px; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}

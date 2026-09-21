@@ -1,0 +1,36 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 24b1d79..06d15bf 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -185,6 +185,7 @@ if(BUILD_HOST_SELFTEST_ONLY)
+ endif()
+ 
+ # Android AAR containing libzt.so
++option(ZTS_NDK_ONLY "Use C API callbacks on Android" FALSE)
+ if(${CMAKE_SYSTEM_NAME} MATCHES "Android")
+     set(BUILD_ANDROID           TRUE)
+     set(BUILD_STATIC_LIB       FALSE)
+@@ -192,8 +193,10 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Android")
+     set(BUILD_HOST_SELFTEST    FALSE)
+     set(BUILD_HOST_EXAMPLES    FALSE)
+     set(ALLOW_INSTALL_TARGET   FALSE)
+-    set(LANG_WRAPPER_FILE ${LIBZT_SRC_DIR}/bindings/java/*.cxx)
+-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DZTS_ENABLE_JAVA=1")
++    if(NOT ZTS_NDK_ONLY)
++        set(LANG_WRAPPER_FILE ${LIBZT_SRC_DIR}/bindings/java/*.cxx)
++        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DZTS_ENABLE_JAVA=1")
++    endif()
+ endif()
+ 
+ if(BUILD_MACOS_FRAMEWORK)
+@@ -460,10 +463,6 @@ endif()
+ # |                                      JNI                                   |
+ # ------------------------------------------------------------------------------
+ 
+-if(BUILD_ANDROID)
+-    option(ZTS_NDK_ONLY "Use C API callbacks on Android" FALSE)
+-endif()
+-
+ if(ZTS_ENABLE_JAVA OR (BUILD_ANDROID AND NOT ZTS_NDK_ONLY))
+     message(STATUS "Looking for JNI")
+     message(STATUS "Ignore seeing \"Found JNI: NotNeeded\" below; check that JNI_INCLUDE_DIRS is valid")
