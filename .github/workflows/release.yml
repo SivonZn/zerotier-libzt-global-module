@@ -57,6 +57,7 @@ jobs:
           import hashlib
           import json
           import os
+          import re
           from pathlib import Path
 
           root = Path.cwd()
@@ -69,8 +70,14 @@ jobs:
               for line in module_prop
               if line.startswith("version=")
           )
-          if tag not in (f"v{version}", version):
-              raise SystemExit(f"Release tag {tag!r} does not match module version {version!r}")
+          # Accept stable and SemVer-style prerelease tags, e.g. v0.3.6,
+          # v0.3.6-beta, or 0.3.6-rc.1, while rejecting other base versions.
+          tag_pattern = rf"^v?{re.escape(version)}(?:-[0-9A-Za-z.-]+)?$"
+          if not re.fullmatch(tag_pattern, tag):
+              raise SystemExit(
+                  f"Release tag {tag!r} does not match module version "
+                  f"{version!r} (optional prerelease suffix allowed)"
+              )
 
           version_code = next(
               int(line.split("=", 1)[1].strip())
