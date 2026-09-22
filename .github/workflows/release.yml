@@ -35,10 +35,8 @@ jobs:
 
       - name: Build WebUI
         run: |
-          cd webui
-          npm ci --ignore-scripts
-          npm run typecheck
-          npm run build
+          bash tools/webui.sh typecheck
+          bash tools/webui.sh build
 
       - name: Build native module
         env:
