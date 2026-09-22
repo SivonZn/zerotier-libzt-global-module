@@ -1,0 +1,106 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 06d15bf..7da646b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -186,6 +186,10 @@ endif()
+ 
+ # Android AAR containing libzt.so
+ option(ZTS_NDK_ONLY "Use C API callbacks on Android" FALSE)
++option(ZTS_EXTERNAL_TAP_ONLY "External TAP owns all virtual Ethernet traffic" FALSE)
++if(ZTS_EXTERNAL_TAP_ONLY)
++    add_definitions(-DZTS_EXTERNAL_TAP_ONLY=1)
++endif()
+ if(${CMAKE_SYSTEM_NAME} MATCHES "Android")
+     set(BUILD_ANDROID           TRUE)
+     set(BUILD_STATIC_LIB       FALSE)
+diff --git a/src/VirtualTap.cpp b/src/VirtualTap.cpp
+index 94b9f24..869e091 100644
+--- a/src/VirtualTap.cpp
++++ b/src/VirtualTap.cpp
+@@ -47,13 +47,16 @@
+ 
+ namespace ZeroTier {
+ 
+-static zts_vnet_frame_callback zts_external_frame_callback = nullptr;
++static Mutex zts_external_frame_mutex;
++static std::map<uint64_t, zts_vnet_frame_callback> zts_external_frame_callbacks;
+ 
+ extern "C" ZTS_API int ZTCALL zts_net_set_frame_callback(
+     uint64_t net_id, zts_vnet_frame_callback callback)
+ {
+-    (void)net_id;
+-    zts_external_frame_callback = callback;
++    if (!net_id) return ZTS_ERR_ARG;
++    Mutex::Lock lock(zts_external_frame_mutex);
++    if (callback) zts_external_frame_callbacks[net_id] = callback;
++    else zts_external_frame_callbacks.erase(net_id);
+     return ZTS_ERR_OK;
+ }
+ 
+@@ -214,9 +217,28 @@ std::vector<InetAddress> VirtualTap::ips() const
+ 
+ void VirtualTap::put(const MAC& from, const MAC& to, unsigned int etherType, const void* data, unsigned int len)
+ {
+-    if (len && _enabled) {
+-        zts_lwip_eth_rx(this, from, to, etherType, data, len);
++    if (!len || !_enabled || !data) return;
++    zts_vnet_frame_callback callback = nullptr;
++    {
++        Mutex::Lock lock(zts_external_frame_mutex);
++        const auto found = zts_external_frame_callbacks.find(_net_id);
++        if (found != zts_external_frame_callbacks.end()) callback = found->second;
++    }
++    if (callback) {
++        // Ownership transfer, not packet mirroring. No lwIP state is needed.
++        std::vector<uint8_t> frame(14 + len);
++        to.copyTo(frame.data(), 6);
++        from.copyTo(frame.data() + 6, 6);
++        frame[12] = static_cast<uint8_t>(etherType >> 8);
++        frame[13] = static_cast<uint8_t>(etherType);
++        memcpy(frame.data() + 14, data, len);
++        callback(_net_id, frame.data(), static_cast<unsigned int>(frame.size()));
++        return;
+     }
++#ifndef ZTS_EXTERNAL_TAP_ONLY
++    zts_lwip_eth_rx(this, from, to, etherType, data, len);
++#endif
++    // In external-only builds a missing callback means drop, never lwIP fallback.
+ }
+ 
+ void VirtualTap::scanMulticastGroups(std::vector<MulticastGroup>& added, std::vector<MulticastGroup>& removed)
+@@ -409,6 +431,13 @@ void zts_lwip_remove_netif(void* netif)
+ 
+ signed char zts_lwip_eth_tx(struct netif* n, struct pbuf* p)
+ {
++#ifdef ZTS_EXTERNAL_TAP_ONLY
++    // Suppress lwIP-generated ARP/NDP/ICMP/TCP and timer-driven traffic too.
++    // Kernel frames use zts_net_send_frame -> tapFrameHandler, not this path.
++    (void)n;
++    (void)p;
++    return ERR_IF;
++#else
+     if (! n) {
+         return ERR_IF;
+     }
+@@ -438,6 +467,7 @@ signed char zts_lwip_eth_tx(struct netif* n, struct pbuf* p)
+     tap->_handler(tap->_arg, NULL, tap->_net_id, src_mac, dest_mac, proto, 0, data, len);
+ 
+     return ERR_OK;
++#endif
+ }
+ 
+ void zts_lwip_eth_rx(
+@@ -460,13 +490,6 @@ void zts_lwip_eth_rx(
+     to.copyTo(ethhdr.dest.addr, 6);
+     ethhdr.type = Utils::hton((uint16_t)etherType);
+ 
+-    if (zts_external_frame_callback) {
+-        std::vector<uint8_t> frame(sizeof(ethhdr) + len);
+-        memcpy(frame.data(), &ethhdr, sizeof(ethhdr));
+-        if (len) memcpy(frame.data() + sizeof(ethhdr), data, len);
+-        zts_external_frame_callback(tap->_net_id, frame.data(), static_cast<unsigned int>(frame.size()));
+-    }
+-
+     p = pbuf_alloc(PBUF_RAW, (uint16_t)len + sizeof(struct eth_hdr), PBUF_RAM);
+     if (! p) {
+         // DEBUG_ERROR("dropped packet: unable to allocate memory for

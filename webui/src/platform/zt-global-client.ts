@@ -1,6 +1,7 @@
 import { runRoot } from "./ksu-runtime";
 import { Config, PlanetInfo, Status } from "../domain/models";
 const ctl = "/data/adb/modules/zerotier-libzt-global/zt-globalctl";
+const daemon = "/data/adb/modules/zerotier-libzt-global/bin/zt-globald";
 const parse = <T>(s: string): T => JSON.parse(s) as T;
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -13,7 +14,7 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 export const client = {
-  status: async () => parse<Status>(await runRoot([ctl, "status"])),
+  status: async () => parse<Status>(await runRoot([daemon, "status"])),
   config: async () => parse<Config>(await runRoot([ctl, "config"])),
   save: async (c: Config) => parse<{ok: boolean}>(await runRoot([ctl, "save", String(c.enabled), c.networkId, c.rulePriority, String(c.routingTable), String(c.mtu), String(c.port)])),
   restart: async () => parse<{ok: boolean}>(await runRoot([ctl, "restart"])),

@@ -1,0 +1,32 @@
+diff --git a/ext/ZeroTierOne/node/C25519.hpp b/ext/ZeroTierOne/node/C25519.hpp
+--- a/ext/ZeroTierOne/node/C25519.hpp
++++ b/ext/ZeroTierOne/node/C25519.hpp
+@@ -156,6 +156,14 @@
+ 		return verify(their,msg,len,signature.data);
+ 	}
+ 
++	static bool privateMatchesPublic(const Pair &original)
++	{
++		Pair derived = original;
++		_calcPubDH(derived);
++		_calcPubED(derived);
++		return memcmp(derived.pub.data, original.pub.data, ZT_C25519_PUBLIC_KEY_LEN) == 0;
++	}
++
+ private:
+ 	// derive first 32 bytes of kp.pub from first 32 bytes of kp.priv
+ 	// this is the ECDH key
+diff --git a/src/Controls.cpp b/src/Controls.cpp
+--- a/src/Controls.cpp
++++ b/src/Controls.cpp
+@@ -295,7 +295,9 @@
+     Identity id;
+     if ((strnlen(key, len) > 32) && (key[10] == ':')) {
+         if (id.fromString(key)) {
+-            return id.locallyValidate();
++            return id.locallyValidate() &&
++                (!id.hasPrivate() ||
++                 C25519::privateMatchesPublic(id.privateKeyPair()));
+         }
+     }
+     return false;

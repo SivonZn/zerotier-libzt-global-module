@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_ROOT="$(cd "$ROOT_DIR/.." && pwd)"
-OUTPUT_DIR="$PROJECT_ROOT/output"
+OUTPUT_DIR="${OUTPUT_DIR:-$PROJECT_ROOT/output}"
 MODULE_DIR="$ROOT_DIR/module"
 VERSION="$(sed -n 's/^version=//p' "$MODULE_DIR/module.prop" | head -1)"
 PACKAGE="$OUTPUT_DIR/zerotier-libzt-global-$VERSION.zip"

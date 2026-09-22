@@ -12,7 +12,7 @@ resolve_android_toolchain
 LIBZT_ROOT="$ROOT_DIR/build/libzt-sdk/$ABI"
 # Always validate/reapply patch inputs and incrementally build libzt, so a
 # changed patch cannot silently pair a new header with an old library.
-"$ROOT_DIR/build_libzt.sh"
+"$ROOT_DIR/scripts/build_libzt.sh"
 if [[ -f "$ROOT_DIR/build/runtime/lib/libzt.so" && -f "$ROOT_DIR/build/libzt-source/include/ZeroTierSockets.h" ]]; then
   mkdir -p "$LIBZT_ROOT/include" "$LIBZT_ROOT/lib"
   cp "$ROOT_DIR/build/libzt-source/include/ZeroTierSockets.h" "$LIBZT_ROOT/include/ZeroTierSockets.h"

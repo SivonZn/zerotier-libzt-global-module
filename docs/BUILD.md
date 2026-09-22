@@ -2,7 +2,8 @@
 
 Static installable files live in `module/`: `module.prop`, `customize.sh`,
 `post-fs-data.sh`, `service.sh`, `uninstall.sh`, `zt-globalctl`, and `config/`.
-Build entry scripts remain at the project root. Packaging combines these
+`build.sh` remains at the project root; libzt build and packaging scripts
+live in `scripts/`. Packaging combines these
 static files with `build/runtime/` and `build/webroot/` into `build/package/`.
 The ZIP has `module.prop` at its root, **not** an enclosing `module/` directory.
 
@@ -10,10 +11,10 @@ From the module root:
 
 ```sh
 git submodule update --init --recursive
-./build_libzt.sh
+./scripts/build_libzt.sh
 ./build.sh
 (cd webui && npm run typecheck && npm run build)
-./package.sh
+./scripts/package.sh
 ```
 
 All project-generated artifacts and dependencies live under `build/`:

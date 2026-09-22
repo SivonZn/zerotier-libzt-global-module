@@ -12,9 +12,18 @@ Apply patches in `series` order:
 2. `0002-tap-routing-multicast-planet.patch`: existing Ethernet frame bridge,
    CIDR prefixes in address/route queries, merged kernel/external multicast
    memberships, and local Core Planet-load introspection.
+3. `0003-exclusive-external-tap.patch`: makes the registered external frame
+   callback the sole Ethernet receive owner, isolates callbacks by network ID,
+   and disables lwIP link output in the Android external-TAP build. This keeps
+   the embedded stack available for Core lifecycle support without mirroring
+   inbound frames or emitting competing ARP/NDP/TCP traffic.
 
-These patches preserve the previous vendored implementation, not an upgrade
-of libzt/Core. ZeroTierOne/lwIP/lwIP-contrib have no local patches.
+4. `0004-identity-key-validation.patch`: derives both DH and signing public
+   keys from the private key and compares them. Applies to the exported
+   ZeroTierOne C25519 header and libzt Controls.cpp.
+
+These are local customizations, not an upgrade of libzt/Core. Original
+recursive vendor submodules remain clean; patches apply only under build/.
 
 `bash tools/prepare-libzt.sh` validates the pinned clean submodules, exports
 tracked upstream files to `build/`, checks every patch, and applies them to

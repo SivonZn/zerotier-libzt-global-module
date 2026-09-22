@@ -8,10 +8,13 @@ mkdir -p "$WORK"
 mkdir -p "$WORK/src"
 rsync -a --delete "$ROOT_DIR/webui/src/" "$WORK/src/"
 cp "$ROOT_DIR/webui/"{package.json,package-lock.json,tsconfig.json,vite.config.ts,index.html} "$WORK/"
-if [[ ! -d "$WORK/node_modules" ]] || ! cmp -s "$WORK/package-lock.json" "$WORK/.installed-lock"; then
+if [[ ! -d "$WORK/node_modules" || ! -f "$WORK/.scripts-disabled" ]] || ! cmp -s "$WORK/package-lock.json" "$WORK/.installed-lock"; then
   # Use the lockfile without inheriting machine-private npm script policies.
-  (cd "$WORK" && npm ci --userconfig=/dev/null --cache "$ROOT_DIR/build/npm-cache" --no-audit --no-fund)
+  # Native build dependencies are supplied by platform optional packages.
+  # Explicitly disable lifecycle scripts (also required by npm 12 policy).
+  (cd "$WORK" && npm ci --ignore-scripts --userconfig=/dev/null --cache "$ROOT_DIR/build/npm-cache" --no-audit --no-fund)
   cp "$WORK/package-lock.json" "$WORK/.installed-lock"
+  touch "$WORK/.scripts-disabled"
 fi
 cd "$WORK"
 case "${1:-build}" in

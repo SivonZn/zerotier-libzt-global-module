@@ -29,18 +29,25 @@ inline bool eligible(const Link& link, const std::string& overlay) {
          link.kind == "bridge" || link.kind == "bond";
 }
 
-inline std::string canonicalPrefix(const std::string& cidr) {
+inline std::string canonicalNetworkPrefix(const std::string& cidr) {
   zt_policy::Prefix prefix;
-  if (!zt_policy::parsePrefix(cidr, prefix) || prefix.length <= 1) return {};
+  if (!zt_policy::parsePrefix(cidr, prefix)) return {};
   const auto width = prefix.ipv6 ? 128u : 32u;
   for (auto bit = prefix.length; bit < width; ++bit)
     prefix.address[bit / 8] &= static_cast<unsigned char>(~(1u << (7 - bit % 8)));
-  // Do not interpret multicast/unspecified address ranges as a physical LAN.
-  if ((!prefix.ipv6 && (prefix.address[0] == 0 || prefix.address[0] >= 224)) ||
-      (prefix.ipv6 && prefix.address[0] == 0xff)) return {};
   char buffer[INET6_ADDRSTRLEN]{};
   if (!inet_ntop(prefix.ipv6 ? AF_INET6 : AF_INET, prefix.address.data(), buffer, sizeof(buffer))) return {};
   return std::string(buffer) + "/" + std::to_string(prefix.length);
+}
+
+inline std::string canonicalPrefix(const std::string& cidr) {
+  const auto canonical = canonicalNetworkPrefix(cidr);
+  zt_policy::Prefix prefix;
+  if (!zt_policy::parsePrefix(canonical, prefix) || prefix.length <= 1) return {};
+  // Physical LAN filtering must not affect general managed-route comparison.
+  if ((!prefix.ipv6 && (prefix.address[0] == 0 || prefix.address[0] >= 224)) ||
+      (prefix.ipv6 && prefix.address[0] == 0xff)) return {};
+  return canonical;
 }
 
 inline Prefixes selectPrefixes(const std::map<int, Link>& links,

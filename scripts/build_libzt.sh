@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC_DIR="$ROOT_DIR/build/libzt-source"
 ABI="${ANDROID_ABI:-arm64-v8a}"
 
@@ -14,7 +14,7 @@ BUILD_DIR="$ROOT_DIR/build/libzt-cmake/$ABI/$(< "$SRC_DIR/.patch-key")"
 cmake -S "$SRC_DIR" -B "$BUILD_DIR" \
   -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI="$ABI" -DANDROID_PLATFORM=android-23 \
-  -DZTS_NDK_ONLY=ON -DBUILD_HOST_SELFTEST=OFF -DCMAKE_BUILD_TYPE=Release \
+  -DZTS_NDK_ONLY=ON -DZTS_EXTERNAL_TAP_ONLY=ON -DBUILD_HOST_SELFTEST=OFF -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 cmake --build "$BUILD_DIR" --parallel "$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
 

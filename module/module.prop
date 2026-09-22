@@ -1,6 +1,6 @@
 id=zerotier-libzt-global
-name=ZeroTier libzt Global Route (Magisk/APatch)
+name=ZeroTier libzt Global Route
 version=0.3.6
-versionCode=9
-author=Codex
-description=Root module that connects a custom ZeroTier network with libzt and installs managed routes above Android VPN rules.
+versionCode=00306
+author=Sivon
+description=Connects a ZeroTier network with lightweight libzt without VPN route.

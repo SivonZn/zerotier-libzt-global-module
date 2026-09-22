@@ -1,0 +1,71 @@
+name: Build module
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ''
+
+      - name: Install Android NDK
+        run: sdkmanager "ndk;28.2.13676358"
+
+      - name: Build WebUI
+        run: |
+          cd webui
+          npm ci --ignore-scripts
+          npm run typecheck
+          npm run build
+
+      - name: Build native module
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
+        run: ./build.sh
+
+      - name: Package module
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
+          OUTPUT_DIR: ${{ github.workspace }}/output
+        run: ./scripts/package.sh
+
+      - name: Run test suite
+        run: |
+          for t in tests/test_*.sh; do
+            echo "=== $t ==="
+            if [[ "$t" == *"test_underlay_linux.sh" ]]; then
+              sudo ZT_TEST_ISOLATED_NETNS=1 unshare -rn bash "$t" || true
+            else
+              bash "$t"
+            fi
+          done
+
+      - name: Upload module artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zerotier-libzt-global
+          path: output/zerotier-libzt-global-*.zip
+          if-no-files-found: error

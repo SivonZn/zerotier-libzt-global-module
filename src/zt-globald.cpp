@@ -2,6 +2,8 @@
 #include "zt_frame_adapter.h"
 #include "managed_route_policy.h"
 #include "underlay_netlink.h"
+#include "tap_reader.h"
+#include "identity_store.h"
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -83,6 +85,8 @@ struct OwnedRouteEntry {
 
 std::atomic<bool> g_running{true};
 int g_tap_fd = -1;
+std::mutex g_tap_mutex;
+std::atomic<bool> g_tap_failed{false};
 uint64_t g_network_id = 0;
 std::mutex g_io_mutex;
 std::string g_control_path = "/data/adb/zt-global/runtime/control.sock";
@@ -97,6 +101,7 @@ std::atomic<bool> g_route_sync_ok{false};
 std::atomic<bool> g_frame_bridge_ready{false};
 std::atomic<bool> g_route_sync_requested{false};
 std::mutex g_status_mutex;
+std::vector<std::string> g_status_addresses;
 std::string g_last_error;
 int g_instance_lock_fd = -1;
 const char* kPidPath = "/data/adb/zt-global/runtime/zt-globald.pid";
@@ -218,40 +223,6 @@ bool writeAll(int fd, const void* data, size_t size) {
   return true;
 }
 
-bool copyFileAtomic(const std::string& source, const std::string& destination, mode_t mode) {
-  const int input = open(source.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-  if (input < 0) return false;
-  const std::string temporary = destination + ".tmp." + std::to_string(getpid());
-  const int output = open(temporary.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, mode);
-  if (output < 0) {
-    close(input);
-    return false;
-  }
-  bool ok = true;
-  char buffer[4096];
-  for (;;) {
-    const ssize_t count = read(input, buffer, sizeof(buffer));
-    if (count == 0) break;
-    if (count < 0) {
-      if (errno == EINTR) continue;
-      ok = false;
-      break;
-    }
-    if (!writeAll(output, buffer, static_cast<size_t>(count))) {
-      ok = false;
-      break;
-    }
-  }
-  if (ok && fsync(output) != 0) ok = false;
-  close(input);
-  close(output);
-  if (ok) {
-    chmod(temporary.c_str(), mode);
-    ok = rename(temporary.c_str(), destination.c_str()) == 0;
-  }
-  if (!ok) unlink(temporary.c_str());
-  return ok;
-}
 
 bool anyNonzero(const std::vector<uint8_t>& bytes, size_t offset, size_t length) {
   if (offset + length > bytes.size()) return false;
@@ -321,60 +292,28 @@ bool validatePlanetFile(const std::string& path, std::string* reason) {
   return validatePlanetBytes(bytes, reason);
 }
 
-std::string parentDirectory(const std::string& path) {
-  const auto slash = path.find_last_of('/');
-  return slash == std::string::npos ? std::string(".") : path.substr(0, slash);
+
+bool validateIdentityRecord(const std::string& record) {
+  char buffer[ZTS_ID_STR_BUF_LEN]{};
+  if (record.size() >= sizeof(buffer)) return false;
+  std::memcpy(buffer, record.data(), record.size());
+  return zts_id_pair_is_valid(buffer, sizeof(buffer)) == 1;
 }
 
 bool prepareIdentity(const Config& config) {
-  const std::string currentPublic = config.storage_path + "/identity.public";
-  const std::string currentSecret = config.storage_path + "/identity.secret";
-  const std::string backupDirectory = parentDirectory(config.storage_path) + "/identity-backup";
-  const std::string backupPublic = backupDirectory + "/identity.public";
-  const std::string backupSecret = backupDirectory + "/identity.secret";
-  const bool hasPublic = access(currentPublic.c_str(), F_OK) == 0;
-  const bool hasSecret = access(currentSecret.c_str(), F_OK) == 0;
-  const bool hasBackupPublic = access(backupPublic.c_str(), F_OK) == 0;
-  const bool hasBackupSecret = access(backupSecret.c_str(), F_OK) == 0;
-  if (hasPublic != hasSecret) {
-    setLastError("identity_incomplete");
-    logLine("refusing to start with an incomplete ZeroTier identity");
-    return false;
-  }
-  if (!hasPublic && hasBackupPublic != hasBackupSecret) {
-    setLastError("identity_backup_incomplete");
-    logLine("refusing to start with an incomplete ZeroTier identity backup");
-    return false;
-  }
-  if (!hasPublic && hasBackupPublic && hasBackupSecret) {
-    mkdir(config.storage_path.c_str(), 0700);
-    if (!copyFileAtomic(backupPublic, currentPublic, 0600) ||
-        !copyFileAtomic(backupSecret, currentSecret, 0600)) {
-      setLastError("identity_restore_failed");
-      return false;
-    }
-    logLine("restored ZeroTier identity from protected backup");
-  }
-  return true;
+  zt_identity::Store store(config.storage_path, validateIdentityRecord);
+  if (store.prepare()) return true;
+  setLastError(store.error);
+  logLine("identity preparation failed: " + store.error);
+  return false;
 }
 
 bool backupIdentity(const Config& config) {
-  const std::string currentPublic = config.storage_path + "/identity.public";
-  const std::string currentSecret = config.storage_path + "/identity.secret";
-  if (access(currentPublic.c_str(), R_OK) != 0 || access(currentSecret.c_str(), R_OK) != 0) {
-    setLastError("identity_files_missing_after_start");
-    return false;
-  }
-  const std::string backupDirectory = parentDirectory(config.storage_path) + "/identity-backup";
-  if (mkdir(backupDirectory.c_str(), 0700) != 0 && errno != EEXIST) {
-    setLastError("identity_backup_directory_failed");
-    return false;
-  }
-  chmod(backupDirectory.c_str(), 0700);
-  const bool ok = copyFileAtomic(currentPublic, backupDirectory + "/identity.public", 0600) &&
-                  copyFileAtomic(currentSecret, backupDirectory + "/identity.secret", 0600);
-  if (!ok) setLastError("identity_backup_failed");
-  return ok;
+  zt_identity::Store store(config.storage_path, validateIdentityRecord);
+  if (store.saveBackup()) return true;
+  setLastError(store.error);
+  logLine("identity backup failed: " + store.error);
+  return false;
 }
 
 uint64_t parseNetworkId(const std::string& value) {
@@ -400,7 +339,11 @@ int openTap(const Config& config) {
     return -1;
   }
   const int flags = fcntl(fd, F_GETFL, 0);
-  if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+    setLastError("unable to enable nonblocking TAP I/O");
+    close(fd);
+    return -1;
+  }
   char networkMac[ZTS_MAC_ADDRSTRLEN] = {};
   if (zts_net_get_mac_str(g_network_id, networkMac, sizeof(networkMac)) == ZTS_ERR_OK &&
       networkMac[0] != '\0') {
@@ -601,7 +544,8 @@ bool outputHasRule(const std::string& output, int priority, const std::string& t
     if (!target.empty()) {
       if (destination.find('/') == std::string::npos)
         destination += destination.find(':') == std::string::npos ? "/32" : "/128";
-      if (zt_underlay::canonicalPrefix(destination) != zt_underlay::canonicalPrefix(target)) continue;
+      const auto expected = zt_underlay::canonicalNetworkPrefix(target);
+      if (expected.empty() || zt_underlay::canonicalNetworkPrefix(destination) != expected) continue;
     }
     if (foundAction && actualArgument == argument) return true;
   }
@@ -768,13 +712,31 @@ std::string snapshotFingerprint(const RoutingSnapshot& snapshot) {
   return value.str();
 }
 
-bool outputHasLine(const std::string& output, const std::vector<std::string>& needles) {
+bool outputHasRoute(const std::string& output, const std::string& target,
+                    const std::string& device, const std::string& via) {
+  const auto expected = zt_underlay::canonicalNetworkPrefix(target);
+  if (expected.empty()) return false;
   std::istringstream lines(output);
   std::string line;
   while (std::getline(lines, line)) {
-    bool matches = true;
-    for (const auto& needle : needles) matches = matches && line.find(needle) != std::string::npos;
-    if (matches) return true;
+    std::istringstream tokens(line);
+    std::string destination, token, actualDevice, actualVia;
+    if (!(tokens >> destination)) continue;
+    if (destination == "unicast" && !(tokens >> destination)) continue;
+    if (destination.find('/') == std::string::npos)
+      destination += destination.find(':') == std::string::npos ? "/32" : "/128";
+    if (zt_underlay::canonicalNetworkPrefix(destination) != expected) continue;
+    while (tokens >> token) {
+      if (token == "dev") tokens >> actualDevice;
+      else if (token == "via") tokens >> actualVia;
+    }
+    const bool direct = via.empty() || via == "0.0.0.0" || via == "::";
+    const auto hostPrefix = [](const std::string& host) {
+      return zt_underlay::canonicalNetworkPrefix(host + (host.find(':') == std::string::npos ? "/32" : "/128"));
+    };
+    if (actualDevice == device &&
+        (direct ? actualVia.empty() : (!actualVia.empty() && hostPrefix(actualVia) == hostPrefix(via))))
+      return true;
   }
   return false;
 }
@@ -790,9 +752,8 @@ bool verifyRoutingState(const Config& config, int priority, const RoutingSnapsho
   for (const auto& route : snapshot.routes) {
     const auto& routeOutput = route.ipv6 ? routes6 : routes4;
     const auto& ruleOutput = route.ipv6 ? rules6 : rules4;
-    if (!outputHasLine(routeOutput, {route.target, "dev " + config.interface_name})) return false;
-    if (!outputHasLine(ruleOutput, {std::to_string(priority) + ":", "to " + route.target,
-                                    "lookup " + std::to_string(config.table)})) return false;
+    if (!outputHasRoute(routeOutput, route.target, config.interface_name, route.via)) return false;
+    if (!outputHasRule(ruleOutput, priority, route.target, "lookup", std::to_string(config.table))) return false;
   }
   const int underlayPriority = std::max(1, priority - 1);
   for (const auto* ruleOutput : {&rules4, &rules6})
@@ -818,9 +779,9 @@ std::vector<OwnedRouteEntry> desiredOwnedEntries(const Config& config, int prior
   for (const auto& route : snapshot.routes) {
     const std::string via = (route.via == "0.0.0.0" || route.via == "::") ? "" : route.via;
     entries.push_back({OwnedKind::Route, route.ipv6, 0, config.table,
-                       route.target, via, config.interface_name});
+                       zt_underlay::canonicalNetworkPrefix(route.target), via, config.interface_name});
     entries.push_back({OwnedKind::Rule, route.ipv6, priority, config.table,
-                       route.target, "", ""});
+                       zt_underlay::canonicalNetworkPrefix(route.target), "", ""});
   }
   return entries;
 }
@@ -862,6 +823,10 @@ bool synchronizeRouting(const Config& config, int priority, std::string* applied
     return false;
   }
   g_network_ready = !snapshot.addresses.empty() && zts_net_transport_is_ready(g_network_id) == 1;
+  {
+    std::lock_guard<std::mutex> lock(g_status_mutex);
+    g_status_addresses = snapshot.addresses;
+  }
   const std::string fingerprint = snapshotFingerprint(snapshot);
   if (fingerprint == *appliedFingerprint) {
     if (!forceVerify || verifyRoutingState(config, priority, snapshot)) {
@@ -902,29 +867,27 @@ bool synchronizeRouting(const Config& config, int priority, std::string* applied
 }
 
 void frameFromLibzt(uint64_t network_id, const void* frame, unsigned int length) {
+  std::lock_guard<std::mutex> lock(g_tap_mutex);
+  if (!g_running || g_tap_failed) return;
   if (network_id != g_network_id || g_tap_fd < 0 || frame == nullptr || length == 0) return;
   const auto* bytes = static_cast<const uint8_t*>(frame);
   const auto written = write(g_tap_fd, bytes, length);
   if (written < 0 && errno != EAGAIN && errno != EWOULDBLOCK) logLine("TAP write failed");
 }
 
-void tapLoop() {
-  std::vector<uint8_t> frame(4096);
-  while (g_running && g_tap_fd >= 0) {
-    const auto received = read(g_tap_fd, frame.data(), frame.size());
-    if (received <= 0) {
-      if (errno == EINTR) continue;
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      continue;
-    }
+void tapLoop(int fd) {
+  const auto error = zt_tap::readFrames(fd, g_running, [](const void* frame, unsigned int size) {
     if (zts_net_send_frame) {
-      if (zts_net_send_frame(g_network_id, frame.data(), static_cast<unsigned int>(received)) < 0) {
+      if (zts_net_send_frame(g_network_id, frame, size) < 0) {
         logLine("libzt frame injection failed");
       }
-    } else {
-      logLine("libzt frame adapter is missing; control-plane only mode");
-      std::this_thread::sleep_for(std::chrono::seconds(5));
     }
+  });
+  if (!error.empty() && g_running) {
+    setLastError(error);
+    logLine(error);
+    g_route_sync_ok = false;
+    g_tap_failed = true;
   }
 }
 
@@ -1048,15 +1011,15 @@ void signalHandler(int) { g_running = false; }
 
 std::string statusJson(const Config& config, int priority) {
   const bool nodeOnline = g_node_started && zts_node_is_online() == 1;
-  const bool dataPlaneReady = nodeOnline && g_network_ready && g_tap_ready &&
+  const bool dataPlaneReady = nodeOnline && g_network_ready && g_tap_ready && !g_tap_failed &&
                               g_route_sync_ok && g_frame_bridge_ready;
   std::ostringstream json;
-  json << "{\"running\":" << (g_running ? "true" : "false")
+  json << "{\"schemaVersion\":1,\"running\":" << (g_running ? "true" : "false")
        << ",\"nodeOnline\":" << (nodeOnline ? "true" : "false")
        << ",\"planetLoaded\":" << (g_planet_loaded ? "true" : "false")
        << ",\"activationId\":\"" << jsonEscape(g_activation_id) << "\""
        << ",\"networkReady\":" << (g_network_ready ? "true" : "false")
-       << ",\"tapReady\":" << (g_tap_ready ? "true" : "false")
+       << ",\"tapReady\":" << (g_tap_ready && !g_tap_failed ? "true" : "false")
        << ",\"routeSync\":" << (g_route_sync_ok ? "true" : "false")
        << ",\"dataPlaneReady\":" << (dataPlaneReady ? "true" : "false")
        << ",\"networkId\":\"" << config.network_id << "\""
@@ -1065,6 +1028,15 @@ std::string statusJson(const Config& config, int priority) {
        << ",\"multicastMembers\":" << g_multicast_member_count.load()
        << ",\"multicastSync\":" << (g_multicast_sync_ok.load() ? "true" : "false")
        << ",\"frameBridge\":" << (g_frame_bridge_ready ? "true" : "false")
+       << ",\"addresses\":[";
+  {
+    std::lock_guard<std::mutex> lock(g_status_mutex);
+    for (size_t i = 0; i < g_status_addresses.size(); ++i) {
+      if (i) json << ',';
+      json << '\"' << jsonEscape(g_status_addresses[i]) << '\"';
+    }
+  }
+  json << "]"
        << ",\"lastError\":\"" << jsonEscape(lastError()) << "\"}";
   return json.str();
 }
@@ -1100,6 +1072,11 @@ void controlLoop(const Config& config, int priority) {
     const std::string value = trim(size > 0 ? std::string(command, command + size) : "status");
     std::string response;
     if (value == "stop") { g_running = false; response = "stopping\n"; }
+    else if (value == "status isrun") response = std::string(g_running ? "true\n" : "false\n");
+    else if (value == "status interface")
+      response = std::string("{\"interface\":\"") + config.interface_name +
+          "\",\"ready\":" + (g_tap_ready && !g_tap_failed ? "true}\n" : "false}\n");
+    else if (value == "status addresses") response = statusJson(config, priority) + "\n";
     else if (value == "routes") {
       response = "table=" + std::to_string(config.table) + " priority=" + std::to_string(priority) + "\n";
     } else if (value == "multicast") {
@@ -1136,6 +1113,12 @@ int sendControl(const std::string& command) {
   }
   close(client);
   return received && size == 0 ? 0 : 1;
+}
+
+int statusCommand(const std::string& command) {
+  if (sendControl(command) == 0) return 0;
+  std::cout << "{\"schemaVersion\":1,\"running\":false,\"nodeOnline\":false,\"planetLoaded\":false,\"networkReady\":false,\"tapReady\":false,\"routeSync\":false,\"dataPlaneReady\":false,\"frameBridge\":false,\"lastError\":\"control socket unavailable\"}\n";
+  return 0;
 }
 
 bool acquireInstanceLock() {
@@ -1199,6 +1182,11 @@ int main(int argc, char** argv) {
     else if (arg == "--control") { control = true; if (index + 1 < argc) controlCommand = argv[++index]; }
     else if (arg == "--validate-planet" && index + 1 < argc) planetToValidate = argv[++index];
     else if (arg == "--activation-id" && index + 1 < argc) g_activation_id = argv[++index];
+  }
+  if (argc >= 2 && std::string(argv[1]) == "status") {
+    std::string command = "status";
+    if (argc >= 3) command += " " + std::string(argv[2]);
+    return statusCommand(command);
   }
   if (!planetToValidate.empty()) {
     std::string reason;
@@ -1303,6 +1291,21 @@ int main(int argc, char** argv) {
   auto lastRouteSync = lastLibztSnapshot;
   while (g_running) {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    if (!g_running) break;
+    if (g_tap_failed) {
+      // The reader has returned; never close/reuse an fd under a live reader.
+      if (tapThread.joinable()) tapThread.join();
+      {
+        std::lock_guard<std::mutex> lock(g_tap_mutex);
+        if (g_tap_fd >= 0) close(g_tap_fd);
+        g_tap_fd = -1;
+      }
+      g_tap_ready = false;
+      g_route_sync_ok = false;
+      cleanupOwnedRoutingState(true);
+      appliedFingerprint.clear();
+      g_tap_failed = false;
+    }
     const auto now = std::chrono::steady_clock::now();
     if (g_network_id == 0) {
       setLastError("Network ID is not configured");
@@ -1338,11 +1341,15 @@ int main(int argc, char** argv) {
         if (!g_frame_bridge_ready) { setLastError("unable to register libzt frame callback"); continue; }
       }
       if (!g_tap_ready) {
-        g_tap_fd = openTap(config);
+        const int fd = openTap(config);
+        {
+          std::lock_guard<std::mutex> lock(g_tap_mutex);
+          g_tap_fd = fd;
+        }
         g_tap_ready = g_tap_fd >= 0;
         if (!g_tap_ready) { setLastError("unable to create or configure TAP interface"); continue; }
-        tapThread = std::thread(tapLoop);
-        multicastThread = std::thread(multicastLoop, config);
+        tapThread = std::thread(tapLoop, fd);
+        if (!multicastThread.joinable()) multicastThread = std::thread(multicastLoop, config);
       }
       g_route_sync_requested = true;
     }
@@ -1364,8 +1371,11 @@ int main(int argc, char** argv) {
     }
   }
 
-  if (g_tap_fd >= 0) { close(g_tap_fd); g_tap_fd = -1; }
   if (tapThread.joinable()) tapThread.join();
+  {
+    std::lock_guard<std::mutex> lock(g_tap_mutex);
+    if (g_tap_fd >= 0) { close(g_tap_fd); g_tap_fd = -1; }
+  }
   if (multicastThread.joinable()) multicastThread.join();
   if (netlinkThread.joinable()) netlinkThread.join();
   if (controlThread.joinable()) controlThread.join();

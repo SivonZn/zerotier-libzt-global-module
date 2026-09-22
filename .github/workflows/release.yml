@@ -1,0 +1,105 @@
+name: Build and publish module release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ''
+
+      - name: Install Android NDK
+        run: sdkmanager "ndk;28.2.13676358"
+
+      - name: Build WebUI
+        run: |
+          cd webui
+          npm ci --ignore-scripts
+          npm run typecheck
+          npm run build
+
+      - name: Build native module
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
+        run: ./build.sh
+
+      - name: Package module
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/28.2.13676358
+          OUTPUT_DIR: ${{ github.workspace }}/output
+        run: ./scripts/package.sh
+
+      - name: Generate update metadata
+        env:
+          OUTPUT_DIR: ${{ github.workspace }}/output
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path.cwd()
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+          tag = event["release"]["tag_name"]
+
+          module_prop = (root / "module" / "module.prop").read_text().splitlines()
+          version = next(
+              line.split("=", 1)[1].strip()
+              for line in module_prop
+              if line.startswith("version=")
+          )
+          if tag not in (f"v{version}", version):
+              raise SystemExit(f"Release tag {tag!r} does not match module version {version!r}")
+
+          version_code = next(
+              int(line.split("=", 1)[1].strip())
+              for line in module_prop
+              if line.startswith("versionCode=")
+          )
+          asset_name = f"zerotier-libzt-global-{version}.zip"
+          asset_path = Path(os.environ["OUTPUT_DIR"]) / asset_name
+          digest = hashlib.sha256(asset_path.read_bytes()).hexdigest()
+          repository = os.environ["GITHUB_REPOSITORY"]
+          payload = {
+              "version": version,
+              "versionCode": version_code,
+              "zipUrl": f"https://github.com/{repository}/releases/download/{tag}/{asset_name}",
+              "changelog": event["release"].get("body") or "",
+              "sha256": digest,
+          }
+          (Path(os.environ["OUTPUT_DIR"]) / "update.json").write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+          )
+          PY
+
+      - name: Upload installable module and update metadata
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: |
+            output/zerotier-libzt-global-*.zip
+            output/update.json
+          fail_on_unmatched_files: true

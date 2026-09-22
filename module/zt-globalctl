@@ -37,23 +37,7 @@ json_bool() {
 }
 
 status() {
-  export LD_LIBRARY_PATH="$MODDIR/lib:${LD_LIBRARY_PATH:-}"
-  result="$($DAEMON --control status 2>/dev/null)"
-  case "$result" in
-    \{*\})
-      iface="$(value interface)"; [ -n "$iface" ] || iface=zt0
-      addresses="$(ip -o -4 addr show dev "$iface" 2>/dev/null | awk 'BEGIN{q=""}{printf "%s\"%s\"",q,$4;q=","}')"
-      [ -n "$addresses" ] || addresses=""
-      result_prefix="$(printf '%s' "$result" | sed 's/}[[:space:]]*$//')"
-      printf '%s' "$result_prefix"; printf ',"addresses":[%s]}\n' "$addresses"
-      ;;
-    *)
-      daemon_running=false
-      [ -n "$(daemon_pids)" ] && daemon_running=true
-      printf '{"running":%s,"nodeOnline":false,"planetLoaded":false,"activationId":"","networkReady":false,"tapReady":false,"routeSync":false,"dataPlaneReady":false,"networkId":"%s","interface":"%s","rulePriority":0,"frameBridge":false,"lastError":"control socket unavailable"}\n' \
-        "$daemon_running" "$(value network_id)" "$(value interface)"
-      ;;
-  esac
+  exec "$DAEMON" status
 }
 
 config_json() {
