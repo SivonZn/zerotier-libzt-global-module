@@ -14,10 +14,11 @@ grep -q 'zts_net_multicast_add' "$SRC/include/ZeroTierSockets.h"
 # Check overlapping patches sequentially in a disposable generated copy.
 CHECK="$(mktemp -d "$ROOT_DIR/build/patch-check.XXXXXX")"
 cp -R "$SRC/src" "$SRC/include" "$SRC/CMakeLists.txt" "$CHECK/"
-mkdir -p "$CHECK/ext/ZeroTierOne/node"
+mkdir -p "$CHECK/ext/ZeroTierOne/node" "$CHECK/ext/ZeroTierOne/ext"
 cp "$SRC/ext/ZeroTierOne/node/C25519.hpp" "$CHECK/ext/ZeroTierOne/node/"
+cp -R "$SRC/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0" "$CHECK/ext/ZeroTierOne/ext/"
 git -C "$CHECK" init -q
-for patch in 0004-identity-key-validation.patch 0003-exclusive-external-tap.patch 0002-tap-routing-multicast-planet.patch 0001-android-native-only.patch; do
+for patch in 0005-gcc-prometheus-stdexcept.patch 0004-identity-key-validation.patch 0003-exclusive-external-tap.patch 0002-tap-routing-multicast-planet.patch 0001-android-native-only.patch; do
   git -C "$CHECK" apply --reverse --check "$ROOT_DIR/patches/libzt/$patch"
   git -C "$CHECK" apply --reverse "$ROOT_DIR/patches/libzt/$patch"
 done

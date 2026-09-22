@@ -2,3 +2,4 @@
 0002-tap-routing-multicast-planet.patch
 0003-exclusive-external-tap.patch
 0004-identity-key-validation.patch
+0005-gcc-prometheus-stdexcept.patch

@@ -21,6 +21,8 @@ Apply patches in `series` order:
 4. `0004-identity-key-validation.patch`: derives both DH and signing public
    keys from the private key and compares them. Applies to the exported
    ZeroTierOne C25519 header and libzt Controls.cpp.
+5. `0005-gcc-prometheus-stdexcept.patch`: adds missing `<stdexcept>` header
+   includes to prometheus-cpp-lite headers for GCC 11+ compatibility on Linux hosts.
 
 These are local customizations, not an upgrade of libzt/Core. Original
 recursive vendor submodules remain clean; patches apply only under build/.

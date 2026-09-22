@@ -4,3 +4,4 @@ version=0.3.6
 versionCode=00306
 author=Sivon
 description=Connects a ZeroTier network with lightweight libzt without VPN route.
+updateJson=https://github.com/SivonZn/zerotier-libzt-global-module/releases/latest/download/update.json

@@ -1,0 +1,60 @@
+diff --git a/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/benchmark.h b/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/benchmark.h
+index 166801b..043f5d5 100644
+--- a/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/benchmark.h
++++ b/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/benchmark.h
+@@ -4,6 +4,7 @@
+ #include "prometheus/family.h"
+ 
+ #include <chrono>
++#include <stdexcept>
+ 
+ namespace prometheus {
+ 
+diff --git a/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/family.h b/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/family.h
+index 956c7df..0ad2ed7 100644
+--- a/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/family.h
++++ b/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/family.h
+@@ -8,6 +8,7 @@
+ #include <unordered_map>
+ #include <vector>
+ #include <cassert>
++#include <stdexcept>
+ 
+ #include "prometheus/collectable.h"
+ #include "prometheus/metric.h"
+diff --git a/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/histogram.h b/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/histogram.h
+index 0afe417..9287ddb 100644
+--- a/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/histogram.h
++++ b/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/histogram.h
+@@ -3,6 +3,7 @@
+ #include <vector>
+ #include <cassert>
+ #include <algorithm>
++#include <stdexcept>
+ 
+ #include "prometheus/metric.h"
+ #include "prometheus/family.h"
+diff --git a/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/registry.h b/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/registry.h
+index 6346742..017fe34 100644
+--- a/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/registry.h
++++ b/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/registry.h
+@@ -5,6 +5,7 @@
+ #include <mutex>
+ #include <string>
+ #include <vector>
++#include <stdexcept>
+ 
+ #include "prometheus/collectable.h"
+ #include "prometheus/family.h"
+diff --git a/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/text_serializer.h b/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/text_serializer.h
+index 019729b..eaceda2 100644
+--- a/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/text_serializer.h
++++ b/ext/ZeroTierOne/ext/prometheus-cpp-lite-1.0/core/include/prometheus/text_serializer.h
+@@ -5,6 +5,7 @@
+ #include <array>
+ #include <math.h>
+ #include <ostream>
++#include <stdexcept>
+ 
+ #include "prometheus/metric_family.h"
+ 
