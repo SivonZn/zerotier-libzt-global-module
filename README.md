@@ -6,7 +6,7 @@
 
 Connect to ZeroTier networks **without occupying Android's `VpnService` slot** — allowing coexistence with proxy/VPN tools!
 
-[![Release](https://img.shields.io/badge/Release-v0.3.6-blue.svg?style=flat-square)](https://github.com/Sivon/zerotier-libzt-global/releases)
+[![Release](https://img.shields.io/badge/Release-v0.3.6-blue.svg?style=flat-square)](https://github.com/SivonZn/zerotier-libzt-global-module/releases)
 [![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B-green.svg?style=flat-square)](https://android.com)
 [![Arch](https://img.shields.io/badge/Arch-arm64--v8a-orange.svg?style=flat-square)](#-requirements)
 [![Root](https://img.shields.io/badge/Root-Magisk%20%7C%20KernelSU%20%7C%20APatch-red.svg?style=flat-square)](#-requirements)
@@ -134,8 +134,8 @@ port=0
 ### Build & Package
 ```sh
 # 1. Clone repository with submodules
-git clone --recurse-submodules https://github.com/Sivon/zerotier-libzt-global.git
-cd zerotier-libzt-global
+git clone --recurse-submodules https://github.com/SivonZn/zerotier-libzt-global-module.git
+cd zerotier-libzt-global-module
 
 # 2. Build patched libzt library
 ./scripts/build_libzt.sh

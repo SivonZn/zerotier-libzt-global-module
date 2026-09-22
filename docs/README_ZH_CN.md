@@ -6,7 +6,7 @@
 
 无需占用 Android `VpnService` 槽位，与 VPN 客户端**完美共存**
 
-[![Release](https://img.shields.io/badge/Release-v0.3.6-blue.svg?style=flat-square)](https://github.com/Sivon/zerotier-libzt-global/releases)
+[![Release](https://img.shields.io/badge/Release-v0.3.6-blue.svg?style=flat-square)](https://github.com/SivonZn/zerotier-libzt-global-module/releases)
 [![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B-green.svg?style=flat-square)](https://android.com)
 [![Arch](https://img.shields.io/badge/Arch-arm64--v8a-orange.svg?style=flat-square)](#-系统要求)
 [![Root](https://img.shields.io/badge/Root-Magisk%20%7C%20KernelSU%20%7C%20APatch-red.svg?style=flat-square)](#-系统要求)
@@ -134,8 +134,8 @@ port=0
 ### 编译与打包
 ```sh
 # 1. 克隆代码与递归子模块
-git clone --recurse-submodules https://github.com/Sivon/zerotier-libzt-global.git
-cd zerotier-libzt-global
+git clone --recurse-submodules https://github.com/SivonZn/zerotier-libzt-global-module.git
+cd zerotier-libzt-global-module
 
 # 2. 编译裁剪补丁版 libzt 核心库
 ./scripts/build_libzt.sh
