@@ -3,7 +3,21 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="$(sed -n 's/^version=//p' "$ROOT_DIR/module/module.prop" | head -1)"
-ARCHIVE="${1:-$ROOT_DIR/../output/zerotier-libzt-global-$VERSION.zip}"
+if [[ $# -ge 1 ]]; then
+  ARCHIVE="$1"
+elif [[ -f "$ROOT_DIR/../output/zerotier-libzt-global-$VERSION.zip" ]]; then
+  # Local workspace layout: Magisk/<module>/ with a shared sibling output/.
+  ARCHIVE="$ROOT_DIR/../output/zerotier-libzt-global-$VERSION.zip"
+else
+  # CI checkout layout: the repository itself is the module root.
+  ARCHIVE="$ROOT_DIR/output/zerotier-libzt-global-$VERSION.zip"
+fi
+
+if [[ ! -f "$ARCHIVE" ]]; then
+  echo "package archive not found: $ARCHIVE" >&2
+  echo "run scripts/package.sh first (or pass the archive path explicitly)" >&2
+  exit 1
+fi
 
 unzip -t "$ARCHIVE" >/dev/null
 TEST_ROOT="$(mktemp -d)"
